@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Data Files (データファイルが大きい場合や公開したくない場合)
+*.csv 
+data/ 
+# ↑もしデータもGitで管理したい場合はコメントアウトしたままか削除
+
+# IDE/Editor specific
+.vscode/
+.idea/
