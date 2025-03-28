@@ -342,3 +342,95 @@ else:
 # ==============================================================================
 # --- ここまでがデータ前処理 ---
 # ==============================================================================
+# ==============================================================================
+# === ↓↓↓ ここからモデル学習・評価コードを追加 ↓↓↓ ===
+# ==============================================================================
+print("\n*** モデル学習と評価を開始します ***")
+
+import lightgbm as lgb
+from sklearn.metrics import (
+    accuracy_score, confusion_matrix, precision_score, 
+    recall_score, f1_score, roc_auc_score, roc_curve
+)
+
+# --- 前提: X_train, X_test, y_train, y_test が準備できていること ---
+if 'X_train' in locals() and 'y_train' in locals() and 'X_test' in locals() and 'y_test' in locals():
+
+    # --- 1. LightGBM モデルの学習 ---
+    print("\n--- LightGBM モデル学習 ---")
+    
+    # 不均衡データ対策: scale_pos_weight を計算
+    # (Y=0 の数) / (Y=1 の数)
+    scale_pos_weight = y_train.value_counts()[0] / y_train.value_counts()[1]
+    print(f"scale_pos_weight (for imbalance): {scale_pos_weight:.4f}")
+
+    # LightGBM分類器を初期化
+    lgbm = lgb.LGBMClassifier(
+        objective='binary',       # 二値分類
+        metric='auc',             # 評価指標にAUCを指定
+        scale_pos_weight=scale_pos_weight, # 不均衡データ対策
+        random_state=42           # 再現性のため
+        # 他のパラメータはまずデフォルトで試す
+        # n_estimators=100, learning_rate=0.1, etc.
+    )
+
+    # モデルを学習 (学習中の評価も表示する例)
+    lgbm.fit(X_train, y_train,
+             eval_set=[(X_test, y_test)],
+             eval_metric='auc',
+             callbacks=[lgb.early_stopping(stopping_rounds=10, verbose=True)]) # 10回連続でAUCが改善しなければ停止
+
+    # --- 2. テストデータでの予測 ---
+    print("\n--- テストデータで予測 ---")
+    # クラス確率を予測 (Y=1 の確率を取得)
+    y_pred_proba = lgbm.predict_proba(X_test)[:, 1]
+    # クラスラベルを予測 (デフォルト閾値 0.5)
+    y_pred = lgbm.predict(X_test)
+
+    # --- 3. モデル評価 ---
+    print("\n--- モデル評価結果 ---")
+    # 混同行列
+    cm = confusion_matrix(y_test, y_pred)
+    print("Confusion Matrix:")
+    print(cm)
+    # [[TN, FP],
+    #  [FN, TP]]
+
+    # 主要な評価指標
+    accuracy = accuracy_score(y_test, y_pred)
+    precision = precision_score(y_test, y_pred)
+    recall = recall_score(y_test, y_pred)
+    f1 = f1_score(y_test, y_pred)
+    auc = roc_auc_score(y_test, y_pred_proba) # AUCは確率で評価
+
+    print(f"Accuracy:  {accuracy:.4f}")
+    print(f"Precision: {precision:.4f}") # Y=1と予測した中で実際にY=1だった割合
+    print(f"Recall:    {recall:.4f}")    # 実際にY=1だった中でY=1と予測できた割合
+    print(f"F1-Score:  {f1:.4f}")       # PrecisionとRecallの調和平均
+    print(f"AUC:       {auc:.4f}")       # モデルの総合的な識別能力 (不均衡データで重要)
+
+    # --- 4. 特徴量重要度の確認 ---
+    print("\n--- 特徴量重要度 (Top 20) ---")
+    feature_importance_df = pd.DataFrame({
+        'feature': X_train.columns,
+        'importance': lgbm.feature_importances_
+    }).sort_values('importance', ascending=False)
+
+    print(feature_importance_df.head(20))
+
+    # (オプション) 特徴量重要度を可視化
+    # plt.figure(figsize=(10, 8))
+    # sns.barplot(x='importance', y='feature', data=feature_importance_df.head(20))
+    # plt.title('LightGBM Feature Importance (Top 20)')
+    # plt.tight_layout()
+    # plt.show() 
+    # plt.savefig('feature_importance.png') # 画像として保存
+
+    print("\nモデル学習と評価が完了しました。")
+
+else:
+    print("エラー: モデル学習に必要なデータ (X_train, y_train, X_test, y_test) が準備できていません。")
+
+# ==============================================================================
+# --- ここまでがモデル学習・評価 ---
+# ==============================================================================
