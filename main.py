@@ -234,3 +234,111 @@ print(df_features.head())
 # del orders_feature_period, order_items_feature, customer_state 
 # del orders_feature_customer, df_recency, df_frequency, order_items_customer, df_monetary
 # gc.collect()
+
+# ==============================================================================
+# === ↓↓↓ ここから特定カテゴリの特徴量作成コードを追加 ↓↓↓ ===
+# ==============================================================================
+print(f"\n--- 特徴量3: 特定カテゴリ ({target_category}) の過去購買行動 ---")
+
+# --- 特徴量作成期間 & 特定カテゴリの注文商品データを抽出 ---
+# (前のステップで order_items_feature, orders_feature_customer が作成されている前提)
+if 'order_items_feature' in locals() and 'orders_feature_customer' in locals():
+    
+    target_items_feature = order_items_feature[order_items_feature['product_category_name_english'] == target_category].copy()
+    
+    # 特定カテゴリの注文に顧客ID (`customer_unique_id`) を紐付け
+    target_items_customer = pd.merge(target_items_feature[['order_id', 'price']],
+                                     orders_feature_customer[['order_id', 'customer_unique_id', 'order_purchase_timestamp']],
+                                     on='order_id', how='left')
+
+    # --- 特徴量の計算 ---
+    # 顧客ごとに集計
+    df_target_features = target_items_customer.groupby('customer_unique_id').agg(
+        target_purchase_count=('order_id', 'nunique'),         # 購入回数 (注文IDのユニーク数)
+        target_purchase_amount=('price', 'sum'),               # 購入金額合計
+        target_last_purchase_date=('order_purchase_timestamp', 'max') # 最終購入日
+    ).reset_index()
+
+    # target_recency の計算
+    df_target_features['target_recency'] = (feature_period_end_date - df_target_features['target_last_purchase_date']).dt.days
+    df_target_features = df_target_features.drop(columns=['target_last_purchase_date']) # 元の日付カラムは削除
+
+    # --- df_features へマージ ---
+    df_features = pd.merge(df_features, df_target_features, on='customer_unique_id', how='left')
+
+    # --- 欠損値処理 & has_purchased_target_before の作成 ---
+    # 購入歴フラグを作成 (NaNでない = 購入したことがある)
+    df_features['has_purchased_target_before'] = (~df_features['target_purchase_count'].isnull()).astype(int)
+    
+    # 各特徴量の欠損値を埋める
+    df_features['target_purchase_count'] = df_features['target_purchase_count'].fillna(0)
+    df_features['target_purchase_amount'] = df_features['target_purchase_amount'].fillna(0)
+    df_features['target_recency'] = df_features['target_recency'].fillna(9999) # 大きな値で埋める
+
+    print(f"特定カテゴリ ({target_category}) に関する特徴量を追加しました。")
+    print(f"追加後のdf shape: {df_features.shape}")
+    print("\n--- 追加された特徴量の基本統計量 ---")
+    print(df_features[['has_purchased_target_before', 'target_purchase_count', 'target_purchase_amount', 'target_recency']].describe())
+    print("\n--- df_features の先頭5行 (関連列) ---")
+    print(df_features[['customer_unique_id', 'Y_purchase_computers_accessories', 'has_purchased_target_before', 'target_purchase_count', 'target_purchase_amount', 'target_recency']].head())
+
+else:
+    print("エラー: 特定カテゴリ特徴量の作成に必要なデータフレームが準備できていません。")
+
+# ==============================================================================
+# --- ここまでが特徴量Xの作成 (第二弾) ---
+# ==============================================================================
+# ==============================================================================
+# === ↓↓↓ ここからデータ前処理コードを追加 ↓↓↓ ===
+# ==============================================================================
+print("\n*** データ前処理を開始します ***")
+
+from sklearn.model_selection import train_test_split
+
+if 'df_features' in locals():
+    # --- 1. データ型の確認 ---
+    print("\n--- 前処理前のデータ型 ---")
+    print(df_features.info())
+
+    # --- 2. カテゴリ変数の処理 (One-Hot Encoding) ---
+    print("\n--- カテゴリ変数 (customer_state) の One-Hot Encoding ---")
+    df_processed = pd.get_dummies(df_features, columns=['customer_state'], dummy_na=False) 
+    # dummy_na=False: 欠損値があってもその列は作らない (今回は欠損ないはずだが念のため)
+    print(f"One-Hot Encoding 後の df shape: {df_processed.shape}")
+    # print(df_processed.head())
+
+    # --- 3. 不要な列の削除 ---
+    # customer_unique_id は後で使うかもしれないので、ここでは残しておくことも可能
+    # df_processed = df_processed.drop(columns=['customer_unique_id']) 
+
+    # --- 4. データの分割 (特徴量Xと目的変数y、学習データとテストデータ) ---
+    print("\n--- 学習データとテストデータへの分割 ---")
+    
+    # 特徴量 X (目的変数YとID列を除く)
+    X = df_processed.drop(columns=['customer_unique_id', 'Y_purchase_computers_accessories'])
+    # 目的変数 y
+    y = df_processed['Y_purchase_computers_accessories']
+
+    # 学習データとテストデータに分割 (テストデータ20%, 不均衡考慮)
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, 
+        test_size=0.2,    # テストデータの割合 (例: 20%)
+        random_state=42,  # 再現性のための乱数シード
+        stratify=y        # yのクラス比率を保ったまま分割
+    )
+
+    print(f"学習データ (X_train) の shape: {X_train.shape}")
+    print(f"テストデータ (X_test) の shape: {X_test.shape}")
+    print(f"学習データ (y_train) の Y=1 の割合: {y_train.mean():.4f}")
+    print(f"テストデータ (y_test) の Y=1 の割合: {y_test.mean():.4f}") # y_train とほぼ同じになるはず
+
+    print("\nデータ前処理と分割が完了しました。")
+    # print("\n--- X_train の先頭5行 ---")
+    # print(X_train.head())
+
+else:
+    print("エラー: 前処理に必要なデータフレーム df_features が準備できていません。")
+
+# ==============================================================================
+# --- ここまでがデータ前処理 ---
+# ==============================================================================
