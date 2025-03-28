@@ -151,3 +151,86 @@ else:
 # ==============================================================================
 # --- ここまでが目的変数Yの作成 ---
 # ==============================================================================
+# ==============================================================================
+# === ↓↓↓ ここから特徴量Xの作成コードを追加 ↓↓↓ ===
+# ==============================================================================
+print("\n*** 特徴量 X の作成を開始します ***")
+
+# --- 特徴量作成期間のデータを準備 ---
+# 基準日以前の注文データ
+orders_feature_period = orders[orders['order_purchase_timestamp'] <= feature_period_end_date].copy()
+print(f"特徴量作成期間の注文数: {len(orders_feature_period)} 件")
+
+# 特徴量作成期間の注文に紐づく order_items データ
+# (もし order_items_products が未定義 or 全期間のものならここで再作成/フィルタ)
+if 'order_items_products' not in locals():
+     order_items_products = pd.merge(order_items, products_english[['product_id', 'product_category_name_english']], on='product_id', how='left')
+order_items_feature = order_items_products[order_items_products['order_id'].isin(orders_feature_period['order_id'])].copy()
+
+
+# --- 1. 顧客属性特徴量：居住地 (州) ---
+print("\n--- 特徴量1: 顧客の州 ---")
+# customer_unique_id と customer_state を紐付け
+customer_state = customers[['customer_unique_id', 'customer_state']].drop_duplicates(subset=['customer_unique_id'])
+
+# df_target にマージ
+df_features = pd.merge(df_target, customer_state, on='customer_unique_id', how='left')
+print("customer_state を追加しました。")
+print(f"追加後のdf shape: {df_features.shape}")
+# print(df_features.head())
+
+
+# --- 2. RFM指標の作成 ---
+print("\n--- 特徴量2: RFM指標 ---")
+# 顧客ID (`customer_unique_id`) を追加
+orders_feature_customer = pd.merge(orders_feature_period[['order_id', 'customer_id', 'order_purchase_timestamp']],
+                                   customer_id_map, on='customer_id', how='left')
+
+# R (Recency): 最終購入日からの経過日数
+# 顧客ごとの最終購入日を計算
+df_recency = orders_feature_customer.groupby('customer_unique_id')['order_purchase_timestamp'].max().reset_index()
+df_recency.columns = ['customer_unique_id', 'last_purchase_date']
+# 基準日からの経過日数を計算
+df_recency['Recency'] = (feature_period_end_date - df_recency['last_purchase_date']).dt.days
+df_recency = df_recency[['customer_unique_id', 'Recency']]
+
+# F (Frequency): 購入回数
+df_frequency = orders_feature_customer.groupby('customer_unique_id')['order_id'].nunique().reset_index()
+df_frequency.columns = ['customer_unique_id', 'Frequency']
+
+# M (Monetary): 合計購入金額 (order_items の price を使う場合)
+# 特徴量作成期間の注文商品データと顧客IDを結合
+order_items_customer = pd.merge(order_items_feature[['order_id', 'price']], 
+                                orders_feature_customer[['order_id', 'customer_unique_id']], 
+                                on='order_id', how='left')
+df_monetary = order_items_customer.groupby('customer_unique_id')['price'].sum().reset_index()
+df_monetary.columns = ['customer_unique_id', 'Monetary']
+# (支払情報 payments テーブルの payment_value を使う場合は別途計算)
+
+# RFM特徴量を df_features にマージ
+df_features = pd.merge(df_features, df_recency, on='customer_unique_id', how='left')
+df_features = pd.merge(df_features, df_frequency, on='customer_unique_id', how='left')
+df_features = pd.merge(df_features, df_monetary, on='customer_unique_id', how='left')
+
+# 欠損値処理 (RFM計算期間内に購入がない顧客)
+df_features['Recency'] = df_features['Recency'].fillna(9999) # 大きな値で埋める (例)
+df_features['Frequency'] = df_features['Frequency'].fillna(0)
+df_features['Monetary'] = df_features['Monetary'].fillna(0)
+
+print("RFM指標 (Recency, Frequency, Monetary) を追加しました。")
+print(f"追加後のdf shape: {df_features.shape}")
+print("\n--- df_features の基本統計量 ---")
+print(df_features[['Recency', 'Frequency', 'Monetary']].describe())
+print("\n--- df_features の先頭5行 ---")
+print(df_features.head())
+
+
+# ==============================================================================
+# --- ここまでが特徴量Xの作成 (第一弾) ---
+# ==============================================================================
+
+# (オプション) 不要になった中間変数を削除してメモリ解放
+# import gc
+# del orders_feature_period, order_items_feature, customer_state 
+# del orders_feature_customer, df_recency, df_frequency, order_items_customer, df_monetary
+# gc.collect()
